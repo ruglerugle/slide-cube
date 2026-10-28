@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SlideCube</title>
+<meta name="description" content="SlideCube（スライドキューブ）。15パズルを立方体にした、4×4×4 の外側の殻 56 マスですべらせるパズル。1〜55 のピースと空白1つ。">
+<style>
+  :root {
+    --bg: #f6f3ec;
+    --panel: #ffffff;
+    --ink: #221d33;
+    --sub: #5d5870;
+    --line: #ddd6c8;
+    --accent: #3c6fc4;
+    --accent-ink: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17151f;
+      --panel: #221f2d;
+      --ink: #ece9f4;
+      --sub: #aaa5bb;
+      --line: #3a3648;
+      --accent: #5b8ee0;
+      --accent-ink: #ffffff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", "Meiryo", sans-serif;
+    line-height: 1.7;
+  }
+  main { max-width: 860px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .lead { color: var(--sub); margin: 0 0 16px; font-size: .95rem; }
+  .stage {
+    position: relative; border: 1px solid #2a2733; border-radius: 14px; overflow: hidden;
+    background: radial-gradient(ellipse at 50% 42%, #34313f 0%, #1c1a24 55%, #0e0d13 100%);
+  }
+  #view { display: block; width: 100%; height: min(72vh, 620px); touch-action: none; cursor: grab; }
+  #view.dragging { cursor: grabbing; }
+  .hud {
+    position: absolute; left: 12px; top: 10px; font-size: .9rem; color: #a9a4b8;
+    pointer-events: none;
+  }
+  .hud b { color: #f1eff7; font-size: 1.15rem; }
+  .solved {
+    position: absolute; left: 50%; top: 14px; transform: translateX(-50%);
+    background: #2f8f57; color: #fff; padding: 6px 16px; border-radius: 999px;
+    font-weight: 700; pointer-events: none;
+  }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+  button {
+    font: inherit; font-size: .92rem; padding: 8px 14px; border-radius: 10px;
+    border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink);
+    cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--accent); }
+  button:active { transform: translateY(1px); }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: .85rem; color: var(--sub); margin-bottom: 8px; }
+  .legend span::before {
+    content: ""; display: inline-block; width: 12px; height: 12px; border-radius: 3px;
+    margin-right: 5px; vertical-align: -1px; background: var(--c);
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>SlideCube</h1>
+  <p class="lead">4×4×4 の外側の殻にある 56 マスに、1〜55 のピースと空白が1つ。空白と同じ列にあるピースをタップすると、空白のほうへすべる。ドラッグで立方体を回せる。</p>
+
+  <div class="stage">
+    <canvas id="view" aria-label="SlideCube。空白と同じ列のピースをタップするとすべる。ドラッグで回転"></canvas>
+    <div class="hud">手数 <b id="moves">0</b></div>
+    <div class="solved" id="solved" hidden>そろった！</div>
+  </div>
+
+  <div class="controls">
+    <button id="btn-shuffle">よく混ぜる</button>
+    <button id="btn-reset" class="ghost">そろった状態に戻す</button>
+    <button id="btn-view" class="ghost">向きを戻す</button>
+  </div>
+
+  <div class="legend">
+    <span style="--c:#d9534f">1〜16 いちばん上の層</span>
+    <span style="--c:#e3922b">17〜28 上から2番目</span>
+    <span style="--c:#3e9e5f">29〜40 上から3番目</span>
+    <span style="--c:#3c6fc4">41〜55 いちばん下の層</span>
+  </div>
+
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(() => {
+  "use strict";
+  const N = 4;
+  const LAYER_COLORS = ["#3c6fc4", "#3e9e5f", "#e3922b", "#d9534f"]; // y = 0..3
+
+  // ---- 盤面の構造（殻の56マス） ----
+  const isShell = (x, y, z) =>
+    [x, y, z].every((v) => v >= 0 && v < N) &&
+    [x, y, z].some((v) => v === 0 || v === N - 1);
+  const key = (x, y, z) => `${x},${y},${z}`;
+
+  const cells = [];
+  for (let y = N - 1; y >= 0; y--)
+    for (let z = 0; z < N; z++)
+      for (let x = 0; x < N; x++)
+        if (isShell(x, y, z)) cells.push({ x, y, z });
+  const cellIndex = new Map(cells.map((c, i) => [key(c.x, c.y, c.z), i]));
+  const lookup = (x, y, z) => cellIndex.get(key(x, y, z));
+  const DIRS = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+  const neighbors = cells.map((c) =>
+    DIRS.map(([dx, dy, dz]) => lookup(c.x + dx, c.y + dy, c.z + dz)).filter((i) => i !== undefined)
+  );
+  const PIECES = cells.length - 1; // 55
+
+  const solvedBoard = () => cells.map((_, i) => (i < PIECES ? i + 1 : 0));
+
+  // board[cell] = ピース番号（0 は空白）
+  let board = solvedBoard();
+  let moves = 0;
+
+  const blankCell = () => board.indexOf(0);
+
+  // 空白からタップしたマスまでの一直線の経路（殻の外を通るなら null）
+  const slidePath = (from, to) => {
+    const a = cells[from], b = cells[to];
+    const diff = [b.x - a.x, b.y - a.y, b.z - a.z];
+    if (diff.filter((d) => d !== 0).length !== 1) return null;
+    const len = Math.abs(diff.find((d) => d !== 0));
+    const step = diff.map(Math.sign);
+    const path = [from];
+    for (let k = 1; k <= len; k++) {
+      const i = lookup(a.x + step[0] * k, a.y + step[1] * k, a.z + step[2] * k);
+      if (i === undefined) return null;
+      path.push(i);
+    }
+    return path;
+  };
+
+  // ---- three.js の描画 ----
+  const canvas = document.getElementById("view");
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 0.62;
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
+  const DEFAULT_DIST = 13;
+  let camDist = DEFAULT_DIST;
+  const placeCamera = () => {
+    camera.position.set(0, 0, camDist);
+    camera.lookAt(0, 0, 0);
+  };
+  placeCamera();
+
+  // 映り込み用の環境（スタジオ風：上が明るいグラデーション＋ソフトボックス）
+  const buildEnvironment = () => {
+    const env = new THREE.Scene();
+    const sky = new THREE.SphereGeometry(30, 32, 16);
+    const top = new THREE.Color(0.42, 0.43, 0.48), bottom = new THREE.Color(0.04, 0.04, 0.05);
+    const colors = [];
+    const p = sky.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const t = THREE.MathUtils.smoothstep(p.getY(i), -18, 22);
+      const c = bottom.clone().lerp(top, t);
+      colors.push(c.r, c.g, c.b);
+    }
+    sky.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    env.add(new THREE.Mesh(sky, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
+    const panel = (w, h, pos, intensity) => {
+      const m = new THREE.Mesh(
+        new THREE.PlaneGeometry(w, h),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(intensity, intensity, intensity), side: THREE.DoubleSide })
+      );
+      m.position.set(...pos);
+      m.lookAt(0, 0, 0);
+      env.add(m);
+    };
+    panel(12, 6, [6, 14, 12], 9);
+    panel(4, 12, [-16, 4, 6], 5);
+    panel(8, 3, [10, 2, -16], 3);
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const tex = pmrem.fromScene(env, 0.035).texture;
+    pmrem.dispose();
+    return tex;
+  };
+  scene.environment = buildEnvironment();
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x3a3644, 0.15));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.5);
+  sun.position.set(4, 7, 9);
+  scene.add(sun);
+
+  const cube = new THREE.Group();
+  scene.add(cube);
+  const DEFAULT_QUAT = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.5, -0.65, 0, "XYZ"));
+  cube.quaternion.copy(DEFAULT_QUAT);
+
+  const posOf = (cell) => {
+    const c = cells[cell];
+    const o = (N - 1) / 2;
+    return new THREE.Vector3(c.x - o, c.y - o, c.z - o);
+  };
+
+  const makeTexture = (num) => {
+    const s = 256;
+    const cv = document.createElement("canvas");
+    cv.width = cv.height = s;
+    const g = cv.getContext("2d");
+    const base = LAYER_COLORS[cells[num - 1].y];
+    g.fillStyle = base;
+    g.fillRect(0, 0, s, s);
+    // ふちをわずかに暗くして、成形品の面のふくらみを出す
+    const vg = g.createRadialGradient(s / 2, s / 2, s * 0.25, s / 2, s / 2, s * 0.75);
+    vg.addColorStop(0, "rgba(255,255,255,0.06)");
+    vg.addColorStop(1, "rgba(0,0,0,0.22)");
+    g.fillStyle = vg;
+    g.fillRect(0, 0, s, s);
+    g.font = `bold ${num >= 10 ? 124 : 140}px "Segoe UI", "Helvetica Neue", Arial, sans-serif`;
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    // 刻印風：下に影、上にハイライト
+    g.fillStyle = "rgba(0,0,0,0.35)";
+    g.fillText(String(num), s / 2 + 2, s / 2 + 12);
+    g.fillStyle = "#fbfaf6";
+    g.fillText(String(num), s / 2, s / 2 + 8);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.encoding = THREE.sRGBEncoding;
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    return tex;
+  };
+
+  // 角を丸めた立方体（細かく分割した箱の頂点を、内側の箱から半径 r の位置へ寄せる）
+  const roundedBox = (size, r, seg) => {
+    const geo = new THREE.BoxGeometry(size, size, size, seg, seg, seg);
+    const pos = geo.attributes.position;
+    const nor = geo.attributes.normal;
+    const inner = size / 2 - r;
+    const v = new THREE.Vector3(), c = new THREE.Vector3(), d = new THREE.Vector3();
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i);
+      c.set(
+        THREE.MathUtils.clamp(v.x, -inner, inner),
+        THREE.MathUtils.clamp(v.y, -inner, inner),
+        THREE.MathUtils.clamp(v.z, -inner, inner)
+      );
+      d.subVectors(v, c);
+      if (d.lengthSq() < 1e-12) continue;
+      d.normalize();
+      pos.setXYZ(i, c.x + d.x * r, c.y + d.y * r, c.z + d.z * r);
+      nor.setXYZ(i, d.x, d.y, d.z);
+    }
+    return geo;
+  };
+
+  const boxGeo = roundedBox(0.93, 0.09, 10);
+  const meshes = new Map(); // ピース番号 → mesh
+  for (let n = 1; n <= PIECES; n++) {
+    const mat = new THREE.MeshPhysicalMaterial({
+      map: makeTexture(n),
+      roughness: 0.38,
+      metalness: 0,
+      clearcoat: 1,
+      clearcoatRoughness: 0.03,
+      envMapIntensity: 0.8,
+    });
+    const mesh = new THREE.Mesh(boxGeo, mat);
+    mesh.userData.piece = n;
+    cube.add(mesh);
+    meshes.set(n, mesh);
+  }
+  const pickables = [...meshes.values()];
+
+  // 空白のマスを示す枠
+  const blankFrame = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(0.9, 0.9, 0.9)),
+    new THREE.LineBasicMaterial({ color: 0x9a96a8 })
+  );
+  cube.add(blankFrame);
+
+  const syncMeshes = () => {
+    board.forEach((n, cell) => {
+      if (n) meshes.get(n).position.copy(posOf(cell));
+      else blankFrame.position.copy(posOf(cell));
+    });
+  };
+
+  // ---- アニメーション ----
+  let anims = [];
+  const ANIM_MS = 110;
+  const animating = () => anims.length > 0;
+
+  const tick = (now) => {
+    anims = anims.filter((a) => {
+      const t = Math.min(1, (now - a.t0) / ANIM_MS);
+      const e = t * (2 - t);
+      a.mesh.position.lerpVectors(a.from, a.to, e);
+      if (t >= 1 && a.onEnd) a.onEnd();
+      return t < 1;
+    });
+    renderer.render(scene, camera);
+    requestAnimationFrame(tick);
+  };
+
+  // ---- 操作 ----
+  const movesEl = document.getElementById("moves");
+  const solvedEl = document.getElementById("solved");
+  let touched = false; // 混ぜてから1手以上動かしたか
+
+  const updateHud = () => {
+    movesEl.textContent = String(moves);
+    const ok = board.every((n, i) => n === solvedBoard()[i]);
+    solvedEl.hidden = !(ok && touched);
+  };
+
+  const tryMove = (cell) => {
+    const b = blankCell();
+    const path = slidePath(b, cell);
+    if (!path) return false;
+    const now = performance.now();
+    for (let k = 1; k < path.length; k++) {
+      const n = board[path[k]];
+      board[path[k - 1]] = n;
+      board[path[k]] = 0;
+      anims.push({ mesh: meshes.get(n), from: posOf(path[k]), to: posOf(path[k - 1]), t0: now });
+    }
+    blankFrame.position.copy(posOf(cell));
+    moves += path.length - 1;
+    touched = true;
+    updateHud();
+    return true;
+  };
+
+  const resetTo = (b) => {
+    anims = [];
+    board = b;
+    moves = 0;
+    touched = false;
+    syncMeshes();
+    updateHud();
+  };
+
+  const shuffled = () => {
+    const b = solvedBoard();
+    let blank = b.indexOf(0);
+    let prev = -1;
+    for (let s = 0; s < 4000; s++) {
+      const opts = neighbors[blank].filter((i) => i !== prev);
+      const next = opts[Math.floor(Math.random() * opts.length)];
+      b[blank] = b[next];
+      b[next] = 0;
+      prev = blank;
+      blank = next;
+    }
+    return b;
+  };
+
+  document.getElementById("btn-shuffle").addEventListener("click", () => resetTo(shuffled()));
+  document.getElementById("btn-reset").addEventListener("click", () => resetTo(solvedBoard()));
+  document.getElementById("btn-view").addEventListener("click", () => {
+    cube.quaternion.copy(DEFAULT_QUAT);
+    camDist = DEFAULT_DIST;
+    placeCamera();
+  });
+
+  // ---- ポインタ（回転・タップ・ピンチ） ----
+  const raycaster = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  const pickCell = (clientX, clientY) => {
+    const r = canvas.getBoundingClientRect();
+    ndc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    raycaster.setFromCamera(ndc, camera);
+    const hit = raycaster.intersectObjects(pickables, false)[0];
+    return hit ? board.indexOf(hit.object.userData.piece) : -1;
+  };
+
+  let hovered = null;
+  const setHover = (cell) => {
+    const n = cell >= 0 && slidePath(blankCell(), cell) ? board[cell] : 0;
+    const mesh = n ? meshes.get(n) : null;
+    if (mesh === hovered) return;
+    if (hovered) hovered.material.emissive.setHex(0x000000);
+    if (mesh) mesh.material.emissive.setHex(0x333333);
+    hovered = mesh;
+  };
+
+  const pointers = new Map();
+  let downPos = null;
+  let dragged = false;
+  let pinchStart = null;
+
+  const AXIS_X = new THREE.Vector3(1, 0, 0);
+  const AXIS_Y = new THREE.Vector3(0, 1, 0);
+  const rotateBy = (dx, dy) => {
+    const qy = new THREE.Quaternion().setFromAxisAngle(AXIS_Y, dx * 0.009);
+    const qx = new THREE.Quaternion().setFromAxisAngle(AXIS_X, dy * 0.009);
+    cube.quaternion.premultiply(qy).premultiply(qx);
+  };
+  const pinchDist = () => {
+    const [a, b] = [...pointers.values()];
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  };
+  const zoomTo = (d) => {
+    camDist = Math.min(22, Math.max(8, d));
+    placeCamera();
+  };
+
+  canvas.addEventListener("pointerdown", (e) => {
+    canvas.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 1) {
+      downPos = { x: e.clientX, y: e.clientY };
+      dragged = false;
+    } else if (pointers.size === 2) {
+      pinchStart = { d: pinchDist(), cam: camDist };
+      dragged = true;
+    }
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    const p = pointers.get(e.pointerId);
+    if (!p) {
+      if (e.pointerType === "mouse") setHover(pickCell(e.clientX, e.clientY));
+      return;
+    }
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.x = e.clientX; p.y = e.clientY;
+    if (pointers.size === 2 && pinchStart) {
+      zoomTo(pinchStart.cam * pinchStart.d / Math.max(1, pinchDist()));
+      return;
+    }
+    if (!dragged && Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > 6) {
+      dragged = true;
+      canvas.classList.add("dragging");
+      setHover(-1);
+    }
+    if (dragged) rotateBy(dx, dy);
+  });
+  const endPointer = (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinchStart = null;
+    if (pointers.size === 0) {
+      canvas.classList.remove("dragging");
+      if (!dragged && e.type === "pointerup" && !animating()) {
+        const cell = pickCell(e.clientX, e.clientY);
+        if (cell >= 0) tryMove(cell);
+        if (e.pointerType === "mouse") setHover(pickCell(e.clientX, e.clientY));
+      }
+    }
+  };
+  canvas.addEventListener("pointerup", endPointer);
+  canvas.addEventListener("pointercancel", endPointer);
+  canvas.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") setHover(-1); });
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    zoomTo(camDist * (1 + Math.sign(e.deltaY) * 0.08));
+  }, { passive: false });
+
+  // ---- サイズ調整 ----
+  const resize = () => {
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  };
+  new ResizeObserver(resize).observe(canvas);
+  resize();
+
+  resetTo(shuffled());
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
