@@ -46,11 +46,28 @@
     pointer-events: none;
   }
   .hud b { color: #f1eff7; font-size: 1.15rem; }
-  .solved {
-    position: absolute; left: 50%; top: 14px; transform: translateX(-50%);
-    background: #2f8f57; color: #fff; padding: 6px 16px; border-radius: 999px;
-    font-weight: 700; pointer-events: none;
+  .clear {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    background: rgba(10, 9, 14, 0.3);
   }
+  .clear[hidden] { display: none; }
+  .clear-box {
+    background: #f8f6f0; color: #221d33; border-radius: 16px; padding: 22px 26px 18px;
+    text-align: center; width: min(320px, calc(100% - 32px)); box-shadow: 0 12px 40px rgba(0,0,0,.45);
+  }
+  .clear-box h2 { margin: 0 0 10px; font-size: 1.5rem; }
+  .clear-stats { display: flex; justify-content: center; gap: 22px; margin-bottom: 16px; }
+  .clear-stats span { display: block; font-size: .8rem; color: #5d5870; }
+  .clear-stats b { font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+  .clear-actions { display: flex; flex-direction: column; gap: 8px; }
+  .clear-actions a, .clear-actions button { display: block; width: 100%; text-align: center; text-decoration: none; }
+  .btn-x {
+    font-size: .92rem; padding: 9px 14px; border-radius: 10px; background: #000; color: #fff;
+    border: 1px solid #000; font-weight: 700;
+  }
+  .clear-box button.ghost { color: #3c6fc4; border-color: #3c6fc4; }
+  .hud .sep { margin: 0 6px; }
+  .hud b { font-variant-numeric: tabular-nums; }
   .controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
   button {
     font: inherit; font-size: .92rem; padding: 8px 14px; border-radius: 10px;
@@ -99,8 +116,21 @@
 
   <div class="stage">
     <canvas id="view" aria-label="SlideCube。空白と同じ列のピースをタップするとすべる。ドラッグで回転"></canvas>
-    <div class="hud">手数 <b id="moves">0</b></div>
-    <div class="solved" id="solved" hidden>そろった！</div>
+    <div class="hud">手数 <b id="moves">0</b><span class="sep"></span>タイム <b id="time">0:00.0</b></div>
+    <div class="clear" id="clear" hidden>
+      <div class="clear-box" role="dialog" aria-labelledby="clear-title">
+        <h2 id="clear-title">クリア！</h2>
+        <div class="clear-stats">
+          <div><span>タイム</span><b id="clear-time"></b></div>
+          <div><span>手数</span><b id="clear-moves"></b></div>
+        </div>
+        <div class="clear-actions">
+          <a class="btn-x" id="clear-share" target="_blank" rel="noopener">𝕏 で結果を投稿</a>
+          <button id="clear-again">もう一度遊ぶ</button>
+          <button class="ghost" id="clear-close">閉じる</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="controls">
@@ -350,19 +380,52 @@
       if (t >= 1 && a.onEnd) a.onEnd();
       return t < 1;
     });
+    if (startAt !== null && finishedMs === null) renderTime();
     renderer.render(scene, camera);
     requestAnimationFrame(tick);
   };
 
   // ---- 操作 ----
   const movesEl = document.getElementById("moves");
-  const solvedEl = document.getElementById("solved");
-  let touched = false; // 混ぜてから1手以上動かしたか
+  const timeEl = document.getElementById("time");
+  const clearEl = document.getElementById("clear");
+  const SHARE_URL = "https://ruglerugle.github.io/slide-cube/";
+
+  // 混ぜた配置から始めたときだけ、最初の1手で計測を始め、そろったら止める
+  let scrambled = false;
+  let startAt = null;
+  let finishedMs = null;
+
+  const formatTime = (ms) => {
+    const t = Math.floor(ms / 100);
+    const m = Math.floor(t / 600), sec = Math.floor((t % 600) / 10), d = t % 10;
+    return `${m}:${String(sec).padStart(2, "0")}.${d}`;
+  };
+  const elapsed = () =>
+    finishedMs !== null ? finishedMs : startAt !== null ? performance.now() - startAt : 0;
+  const renderTime = () => { timeEl.textContent = formatTime(elapsed()); };
+
+  const showClear = () => {
+    const time = formatTime(finishedMs);
+    document.getElementById("clear-time").textContent = time;
+    document.getElementById("clear-moves").textContent = String(moves);
+    const text = `立体スライドパズル SlideCube をクリア！
+タイム ${time} ／ 手数 ${moves}
+#SlideCube`;
+    document.getElementById("clear-share").href =
+      `https://x.com/intent/post?text=${encodeURIComponent(text)}&url=${encodeURIComponent(SHARE_URL)}`;
+    clearEl.hidden = false;
+  };
 
   const updateHud = () => {
     movesEl.textContent = String(moves);
+    renderTime();
     const ok = board.every((n, i) => n === solvedBoard()[i]);
-    solvedEl.hidden = !(ok && touched);
+    if (ok && scrambled && finishedMs === null && startAt !== null) {
+      finishedMs = performance.now() - startAt;
+      renderTime();
+      setTimeout(showClear, ANIM_MS + 150);
+    }
   };
 
   const tryMove = (cell) => {
@@ -378,25 +441,28 @@
     }
     blankFrame.position.copy(posOf(cell));
     moves += path.length - 1;
-    touched = true;
+    if (scrambled && startAt === null) startAt = now;
     updateHud();
     return true;
   };
 
-  const resetTo = (b) => {
+  const resetTo = (b, isScrambled) => {
     anims = [];
     board = b;
     moves = 0;
-    touched = false;
+    scrambled = isScrambled;
+    startAt = null;
+    finishedMs = null;
+    clearEl.hidden = true;
     syncMeshes();
     updateHud();
   };
 
-  const shuffled = () => {
+  const shuffled = (steps = 4000) => {
     const b = solvedBoard();
     let blank = b.indexOf(0);
     let prev = -1;
-    for (let s = 0; s < 4000; s++) {
+    for (let s = 0; s < steps; s++) {
       const opts = neighbors[blank].filter((i) => i !== prev);
       const next = opts[Math.floor(Math.random() * opts.length)];
       b[blank] = b[next];
@@ -407,8 +473,13 @@
     return b;
   };
 
-  document.getElementById("btn-shuffle").addEventListener("click", () => resetTo(shuffled()));
-  document.getElementById("btn-reset").addEventListener("click", () => resetTo(solvedBoard()));
+  // ?scramble=N で混ぜる手数を変えられる（動作確認用）
+  const scrambleSteps = Number(new URLSearchParams(location.search).get("scramble")) || 4000;
+  const newGame = () => resetTo(shuffled(scrambleSteps), true);
+  document.getElementById("btn-shuffle").addEventListener("click", newGame);
+  document.getElementById("btn-reset").addEventListener("click", () => resetTo(solvedBoard(), false));
+  document.getElementById("clear-again").addEventListener("click", newGame);
+  document.getElementById("clear-close").addEventListener("click", () => { clearEl.hidden = true; });
   document.getElementById("btn-view").addEventListener("click", () => {
     cube.quaternion.copy(DEFAULT_QUAT);
     camDist = DEFAULT_DIST;
@@ -531,7 +602,7 @@
   new ResizeObserver(resize).observe(canvas);
   resize();
 
-  resetTo(shuffled());
+  newGame();
   requestAnimationFrame(tick);
 })();
 // ---- 広告欄（Amazonアソシエイト、数秒ごとに切り替え） ----
