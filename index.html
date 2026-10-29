@@ -64,6 +64,32 @@
     content: ""; display: inline-block; width: 12px; height: 12px; border-radius: 3px;
     margin-right: 5px; vertical-align: -1px; background: var(--c);
   }
+  .ad {
+    margin-top: 24px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 12px 16px 10px;
+  }
+  .ad-head { display: flex; justify-content: space-between; align-items: center; font-size: .8rem; color: var(--sub); }
+  .ad-nav { display: flex; gap: 4px; }
+  .ad-nav button { padding: 2px 10px; font-size: .85rem; }
+  .ad-card {
+    display: flex; gap: 14px; align-items: center; margin: 8px 0 6px;
+    text-decoration: none; color: inherit; min-height: 84px;
+    transition: opacity .35s ease;
+  }
+  .ad-card.fading { opacity: 0; }
+  .ad-icon {
+    flex: none; width: 64px; height: 64px; border-radius: 12px; display: grid; place-items: center;
+    font-size: 2rem; background: var(--bg); border: 1px solid var(--line);
+  }
+  .ad-title, .ad-desc, .ad-cta { display: block; }
+  .ad-title { font-weight: 700; }
+  .ad-desc { font-size: .88rem; color: var(--sub); margin-top: 2px; }
+  .ad-cta { font-size: .85rem; color: var(--accent); margin-top: 4px; }
+  .ad-card:hover .ad-title { text-decoration: underline; }
+  .ad-dots { display: flex; gap: 6px; justify-content: center; margin: 2px 0 6px; }
+  .ad-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--line); }
+  .ad-dots i.on { background: var(--accent); }
+  .pr-disclosure { font-size: .75rem; color: var(--sub); margin: 0; }
 </style>
 </head>
 <body>
@@ -89,6 +115,26 @@
     <span style="--c:#3e9e5f">29〜40 上から3番目</span>
     <span style="--c:#3c6fc4">41〜55 いちばん下の層</span>
   </div>
+
+  <aside class="ad" id="ad" aria-label="広告">
+    <div class="ad-head">
+      <span>おすすめ［PR］</span>
+      <span class="ad-nav">
+        <button class="ghost" id="ad-prev" aria-label="前の商品">‹</button>
+        <button class="ghost" id="ad-next" aria-label="次の商品">›</button>
+      </span>
+    </div>
+    <a class="ad-card" id="ad-card" target="_blank" rel="sponsored noopener">
+      <span class="ad-icon" id="ad-icon" aria-hidden="true"></span>
+      <span>
+        <span class="ad-title" id="ad-title"></span>
+        <span class="ad-desc" id="ad-desc"></span>
+        <span class="ad-cta">Amazonで見る →</span>
+      </span>
+    </a>
+    <div class="ad-dots" id="ad-dots"></div>
+    <p class="pr-disclosure">※ Amazonのアソシエイトとして、当サイトは適格販売により収入を得ています。</p>
+  </aside>
 
 </main>
 
@@ -474,6 +520,67 @@
 
   resetTo(shuffled());
   requestAnimationFrame(tick);
+})();
+// ---- 広告欄（Amazonアソシエイト、数秒ごとに切り替え） ----
+(() => {
+  "use strict";
+  const TAG = "senjin-22";
+  const INTERVAL_MS = 6000;
+  const ITEMS = [
+    { icon: "🧊", title: "4×4 スピードキューブ", desc: "SlideCube と同じ 4×4×4。回して遊ぶ本家の立体パズル", q: "スピードキューブ 4x4 マグネット" },
+    { icon: "🟥", title: "ルービックキューブ", desc: "定番の 3×3。手順の組み立て方は群論そのもの", q: "ルービックキューブ 公式" },
+    { icon: "🔢", title: "15パズル（スライドパズル）", desc: "SlideCube の元になった、平面のスライドパズル", q: "15パズル スライドパズル" },
+    { icon: "🪵", title: "木製の立体パズル", desc: "組木やキャストパズルなど、手で考える立体パズル", q: "立体パズル 木製 大人" },
+    { icon: "📘", title: "群論の入門書", desc: "パズルがそろう・そろわないを言い切る数学", q: "群論 入門" },
+    { icon: "📗", title: "ガロア理論の本", desc: "群の考え方で、5次方程式に解の公式がない理由へ", q: "ガロア理論 入門" },
+    { icon: "🧩", title: "数学パズルの本", desc: "ひらめきと論理で解く、数学好きのためのパズル集", q: "数学パズル 本" },
+    { icon: "📕", title: "キューブの解き方の本", desc: "交換子や共役で、ピースを狙い通りに動かす手順", q: "ルービックキューブ 解き方 本" },
+  ];
+  const url = (q) => `https://www.amazon.co.jp/s?k=${encodeURIComponent(q)}&tag=${TAG}`;
+
+  // 見るたびに並びを変える
+  const order = ITEMS.map((_, i) => i);
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+
+  const $ = (id) => document.getElementById(id);
+  const card = $("ad-card"), dots = $("ad-dots");
+  dots.innerHTML = ITEMS.map(() => "<i></i>").join("");
+  let pos = 0;
+
+  const show = (k) => {
+    pos = (k + order.length) % order.length;
+    const it = ITEMS[order[pos]];
+    card.href = url(it.q);
+    $("ad-icon").textContent = it.icon;
+    $("ad-title").textContent = it.title;
+    $("ad-desc").textContent = it.desc;
+    [...dots.children].forEach((d, i) => d.classList.toggle("on", i === pos));
+  };
+  const go = (k) => {
+    card.classList.add("fading");
+    setTimeout(() => { show(k); card.classList.remove("fading"); }, 350);
+  };
+
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let paused = false;
+  let timer = null;
+  const restart = () => {
+    clearInterval(timer);
+    if (!reduced) timer = setInterval(() => { if (!paused && !document.hidden) go(pos + 1); }, INTERVAL_MS);
+  };
+  const ad = $("ad");
+  ad.addEventListener("mouseenter", () => { paused = true; });
+  ad.addEventListener("mouseleave", () => { paused = false; });
+  ad.addEventListener("focusin", () => { paused = true; });
+  ad.addEventListener("focusout", () => { paused = false; });
+  $("ad-prev").addEventListener("click", () => { go(pos - 1); restart(); });
+  $("ad-next").addEventListener("click", () => { go(pos + 1); restart(); });
+
+  show(0);
+  restart();
 })();
 </script>
 </body>
