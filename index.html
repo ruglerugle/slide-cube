@@ -443,6 +443,7 @@
 
   const AXIS_X = new THREE.Vector3(1, 0, 0);
   const AXIS_Y = new THREE.Vector3(0, 1, 0);
+  const AXIS_Z = new THREE.Vector3(0, 0, 1); // 画面に垂直な軸
   const rotateBy = (dx, dy) => {
     const qy = new THREE.Quaternion().setFromAxisAngle(AXIS_Y, dx * 0.009);
     const qx = new THREE.Quaternion().setFromAxisAngle(AXIS_X, dy * 0.009);
@@ -451,6 +452,15 @@
   const pinchDist = () => {
     const [a, b] = [...pointers.values()];
     return Math.hypot(a.x - b.x, a.y - b.y);
+  };
+  const pinchAngle = () => {
+    const [a, b] = [...pointers.values()];
+    return Math.atan2(b.y - a.y, b.x - a.x);
+  };
+  // 2本指をひねった分だけ、画面に垂直な軸のまわりに回す（画面の y は下向きなので符号を反転）
+  const twistBy = (dAngle) => {
+    const d = Math.atan2(Math.sin(dAngle), Math.cos(dAngle));
+    cube.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(AXIS_Z, -d));
   };
   const zoomTo = (d) => {
     camDist = Math.min(22, Math.max(8, d));
@@ -464,7 +474,7 @@
       downPos = { x: e.clientX, y: e.clientY };
       dragged = false;
     } else if (pointers.size === 2) {
-      pinchStart = { d: pinchDist(), cam: camDist };
+      pinchStart = { d: pinchDist(), cam: camDist, angle: pinchAngle() };
       dragged = true;
     }
   });
@@ -478,6 +488,9 @@
     p.x = e.clientX; p.y = e.clientY;
     if (pointers.size === 2 && pinchStart) {
       zoomTo(pinchStart.cam * pinchStart.d / Math.max(1, pinchDist()));
+      const angle = pinchAngle();
+      twistBy(angle - pinchStart.angle);
+      pinchStart.angle = angle;
       return;
     }
     if (!dragged && Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > 6) {
